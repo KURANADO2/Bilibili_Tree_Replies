@@ -293,6 +293,22 @@
     `;
   }
 
+  function resetRootComments(mode = state.rootCursor.mode) {
+    state.rootCursor = {
+      loaded: false,
+      loading: false,
+      error: "",
+      mode,
+      page: 0,
+      total: 0,
+      isEnd: false,
+    };
+    state.roots = [];
+    state.replyStores.clear();
+    state.autoReplyQueueRunning = false;
+    state.activeReplyId = "";
+  }
+
   async function loadRootComments() {
     if (state.rootCursor.loading || state.rootCursor.isEnd) return;
     state.rootCursor.loading = true;
@@ -676,6 +692,20 @@
     loadMore.disabled = state.rootCursor.loading || state.rootCursor.isEnd;
     loadMore.textContent = state.rootCursor.isEnd ? "没有更多评论" : "更多评论";
     list.innerHTML = state.roots.map(renderRoot).join("");
+
+  }
+
+  function syncSortTabs() {
+    const panel = document.querySelector(".btr-panel");
+    if (!panel) return;
+
+    panel.querySelectorAll("[data-action='sort-roots']").forEach((button) => {
+      const sortMode = Number(button.getAttribute("data-mode"));
+      if (!Number.isFinite(sortMode)) return;
+      const active = sortMode === state.rootCursor.mode;
+      button.classList.toggle("btr-sort-button--active", active);
+      button.disabled = active || state.rootCursor.loading;
+    });
   }
 
   const COMMENT_HOST_SELECTORS = [
@@ -773,6 +803,10 @@
         <header class="btr-header">
           <div>
             <div class="btr-title">评论</div>
+            <div class="btr-sort-tabs" aria-label="评论排序">
+              <button class="btr-sort-button btr-sort-button--active" type="button" data-action="sort-roots" data-mode="3">最热</button>
+              <button class="btr-sort-button" type="button" data-action="sort-roots" data-mode="2">最新</button>
+            </div>
             <div class="btr-status">正在准备评论</div>
           </div>
           <div class="btr-header-actions">
@@ -799,6 +833,7 @@
       host.prepend(shell);
     }
     applyNativeVisibility();
+    syncSortTabs();
 
     shell.addEventListener("click", (event) => {
       const target = event.target.closest("[data-action]");
@@ -824,19 +859,20 @@
         applyNativeVisibility();
       }
       if (action === "load-roots") loadRootComments();
+      if (action === "sort-roots") {
+        const sortMode = Number(target.getAttribute("data-mode"));
+        if (!Number.isFinite(sortMode)) return;
+        if (sortMode !== state.rootCursor.mode) {
+          resetRootComments(sortMode);
+          syncSortTabs();
+          render();
+          loadRootComments();
+          return;
+        }
+      }
       if (action === "refresh") {
-        state.rootCursor = {
-          loaded: false,
-          loading: false,
-          error: "",
-          mode: 3,
-          page: 0,
-          total: 0,
-          isEnd: false,
-        };
-        state.roots = [];
-        state.replyStores.clear();
-        state.autoReplyQueueRunning = false;
+        resetRootComments();
+        syncSortTabs();
         loadRootComments();
       }
       if (action === "toggle-root" || action === "load-replies") {
@@ -898,15 +934,8 @@
     state.replyStores.clear();
     state.autoReplyQueueRunning = false;
     state.nativeVisible = false;
-    state.rootCursor = {
-      loaded: false,
-      loading: false,
-      error: "",
-      mode: 3,
-      page: 0,
-      total: 0,
-      isEnd: false,
-    };
+    resetRootComments(3);
+    syncSortTabs();
     render();
     init();
   }, 1000);

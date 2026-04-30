@@ -36,6 +36,35 @@
   line-height: 1.2;
 }
 
+.btr-sort-tabs {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.btr-sort-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #9499a0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  padding: 0;
+}
+
+.btr-sort-button:hover,
+.btr-sort-button--active {
+  color: #18191c;
+  font-weight: 600;
+}
+
+.btr-sort-button:disabled {
+  cursor: default;
+}
+
 .btr-status,
 .btr-muted,
 .btr-note {
@@ -315,6 +344,7 @@
 }
 
 .btr-shell--native-mode .btr-status,
+.btr-shell--native-mode .btr-sort-tabs,
 .btr-shell--native-mode .btr-list,
 .btr-shell--native-mode .btr-footer,
 .btr-shell--native-mode [data-action="refresh"] {

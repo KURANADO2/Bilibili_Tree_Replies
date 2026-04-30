@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Bilibili Tree Replies",
   "description": "Show Bilibili video comment replies as a multi-level tree.",
-  "version": "0.2.3",
+  "version": "0.2.7",
   "permissions": [],
   "host_permissions": [
     "https://www.bilibili.com/*",

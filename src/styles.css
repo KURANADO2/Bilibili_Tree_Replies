@@ -359,10 +359,6 @@
   display: none !important;
 }
 
-.btr-shell[data-btr-can-hide-siblings="true"][data-btr-native-visible="false"] ~ * {
-  display: none !important;
-}
-
 @media (max-width: 640px) {
   .btr-header {
     align-items: flex-start;

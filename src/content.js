@@ -745,20 +745,33 @@
       hosts.add(element);
     });
 
-    document.querySelectorAll(COMMENT_HOST_SELECTORS.join(",")).forEach((element) => {
-      if (!element.isConnected || element === shell || element.closest(".btr-shell") || element.contains(shell)) return;
-      hosts.add(element);
-    });
+    if (hosts.size > 0) return [...hosts];
 
-    if (shell?.dataset.btrCanHideSiblings === "true") {
-      let sibling = shell.nextElementSibling;
-      while (sibling) {
-        if (!sibling.matches("script, style, link")) hosts.add(sibling);
-        sibling = sibling.nextElementSibling;
-      }
+    const fallbackHost = findCommentHost(false);
+    if (
+      fallbackHost &&
+      fallbackHost.isConnected &&
+      fallbackHost !== shell &&
+      !fallbackHost.closest(".btr-shell") &&
+      !fallbackHost.contains(shell)
+    ) {
+      hosts.add(fallbackHost);
     }
 
     return [...hosts];
+  }
+
+  async function ensureNativeCommentApp() {
+    const host = document.querySelector("[data-btr-native-comment='true']") || document.querySelector("#commentapp");
+    if (!host || host.querySelector("bili-comments, bili-comments-v2, bb-comment")) return;
+
+    const aid = await ensureAid();
+    const comments = document.createElement("bili-comments");
+    comments.setAttribute("data-params", `${COMMENT_TYPE_VIDEO},${aid}`);
+    comments.setAttribute("lazy-load", "true");
+    comments.setAttribute("spm-prefix", "333.788");
+    comments.setAttribute("disable-up-actions", "true");
+    host.append(comments);
   }
 
   function applyNativeVisibility() {
@@ -770,20 +783,53 @@
 
     const hosts = findNativeCommentHosts();
     hosts.forEach((element) => {
-      if (!element.dataset.btrNativeDisplay || element.dataset.btrNativeDisplay === "none") {
-        element.dataset.btrNativeDisplay = "";
+      if (element.dataset.btrNativeDisplay == null) {
+        element.dataset.btrNativeDisplay = element.style.display || "";
       }
       element.classList.toggle("btr-original-hidden", !state.nativeVisible);
-      if (state.nativeVisible && element.style.display === "none") {
-        element.style.display = element.dataset.btrNativeDisplay || "";
+
+      if (state.nativeVisible) {
+        const originalDisplay = element.dataset.btrNativeDisplay;
+        if (originalDisplay && originalDisplay !== "none") {
+          element.style.display = originalDisplay;
+        } else {
+          element.style.removeProperty("display");
+        }
+      } else {
+        element.style.display = "none";
       }
     });
+
+    if (state.nativeVisible) {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event("resize"));
+        window.dispatchEvent(new Event("scroll"));
+      });
+    }
 
     const toggle = document.querySelector("[data-action='toggle-native']");
     if (toggle) {
       toggle.textContent = state.nativeVisible ? "切换到树形评论" : "切换到原评论区";
       toggle.title = hosts.length === 0 ? "暂未定位到原评论区" : "";
     }
+
+    console.info("[Bilibili Tree Replies] native visibility", {
+      visible: state.nativeVisible,
+      hosts: hosts.map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          tag: element.tagName,
+          id: element.id,
+          className: element.className,
+          inlineDisplay: element.style.display,
+          computedDisplay: style.display,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          childCount: element.childElementCount,
+        };
+      }),
+    });
   }
 
   function setupPanel() {
@@ -823,13 +869,11 @@
 
     if (nativeHost?.parentElement) {
       nativeHost.dataset.btrNativeComment = "true";
-      if (nativeHost.dataset.btrNativeDisplay === "none") {
-        nativeHost.dataset.btrNativeDisplay = "";
+      if (nativeHost.dataset.btrNativeDisplay == null) {
+        nativeHost.dataset.btrNativeDisplay = nativeHost.style.display || "";
       }
-      shell.dataset.btrCanHideSiblings = "true";
       nativeHost.parentElement.insertBefore(shell, nativeHost);
     } else {
-      shell.dataset.btrCanHideSiblings = "false";
       host.prepend(shell);
     }
     applyNativeVisibility();
@@ -857,6 +901,11 @@
       if (action === "toggle-native") {
         state.nativeVisible = !state.nativeVisible;
         applyNativeVisibility();
+        if (state.nativeVisible) {
+          ensureNativeCommentApp()
+            .then(() => applyNativeVisibility())
+            .catch((error) => console.warn("[Bilibili Tree Replies] native comment mount failed", error));
+        }
       }
       if (action === "load-roots") loadRootComments();
       if (action === "sort-roots") {

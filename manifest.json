@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Bilibili Tree Replies",
-  "description": "Show Bilibili video comment replies as a multi-level tree.",
+  "description": "将 B 站视频评论下的多级回复以树形结构展示，支持根评论排序、原评论切换和快速回复。",
   "version": "0.2.7",
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
   "permissions": [],
   "host_permissions": [
     "https://www.bilibili.com/*",

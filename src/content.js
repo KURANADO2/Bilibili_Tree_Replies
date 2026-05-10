@@ -20,6 +20,7 @@
     replyStores: new Map(),
     autoReplyQueueRunning: false,
     nativeVisible: false,
+    nativeCommentHost: null,
     activeReplyId: "",
     pageBridgeReady: false,
     pageBridgeReadyPromise: null,
@@ -710,134 +711,157 @@
 
   const COMMENT_HOST_SELECTORS = [
     "#commentapp",
-    "#comment",
-    ".reply-wrap",
-    ".reply-warp",
-    ".reply-container",
-    ".reply-list",
-    ".comment-container",
-    ".comment-list",
-    ".comment-m",
-    ".bili-comment-container",
-    ".bili-comments",
-    ".video-comments",
-    "bili-comments",
-    "bili-comments-v2",
-    "bb-comment",
   ];
 
-  function findCommentHost(allowFallback = false) {
+  const PAGE_CHROME_SELECTOR = [
+    "header",
+    "nav",
+    "[role='navigation']",
+    "#bili-header-container",
+    ".bili-header",
+    ".bili-header-container",
+    ".bili-header__bar",
+    ".international-header",
+    ".mini-header",
+    ".left-entry",
+    ".right-entry",
+    ".channel-entry",
+  ].join(",");
+
+  const VIDEO_PAGE_BODY_SELECTOR = [
+    "#bilibili-player",
+    ".bpx-player-container",
+    ".player-wrap",
+    ".video-container-v1",
+    ".video-info-container",
+    ".video-toolbar-container",
+  ].join(",");
+
+  function isSafeCommentHost(host) {
+    if (!host || !host.isConnected) return false;
+    const shell = document.querySelector(".btr-shell");
+    if (host === shell || host.closest(".btr-shell")) return false;
+    if (host.closest(PAGE_CHROME_SELECTOR)) return false;
+    if (host.matches(VIDEO_PAGE_BODY_SELECTOR) || host.querySelector(VIDEO_PAGE_BODY_SELECTOR)) return false;
+
+    const pageTop = host.getBoundingClientRect().top + window.scrollY;
+    if (pageTop < 300) return false;
+
+    return true;
+  }
+
+  function isNativeCommentElement(host) {
+    if (host.id === "commentapp") return true;
+    return false;
+  }
+
+  function findNativeCommentComponent(host) {
+    if (!host) return null;
+    return [...host.children].find((child) => {
+      const tagName = child.tagName.toLowerCase();
+      return ["bili-comments", "bili-comments-v2", "bb-comment"].includes(tagName);
+    }) || host.querySelector(":scope > bili-comments, :scope > bili-comments-v2, :scope > bb-comment");
+  }
+
+  function restoreElementDisplay(element) {
+    element.classList.remove("btr-original-hidden");
+    const originalDisplay = element.dataset.btrNativeDisplay;
+    if (originalDisplay && originalDisplay !== "none") {
+      element.style.display = originalDisplay;
+    } else {
+      element.style.removeProperty("display");
+    }
+    delete element.dataset.btrNativeComment;
+    delete element.dataset.btrNativeDisplay;
+  }
+
+  function findCommentHost() {
     for (const selector of COMMENT_HOST_SELECTORS) {
       const host = document.querySelector(selector);
-      if (host) return host;
+      if (host && isNativeCommentElement(host) && isSafeCommentHost(host)) return host;
     }
 
-    if (!allowFallback) return null;
-    return document.querySelector(".left-container") || document.querySelector("main") || document.body;
+    return null;
   }
 
-  function findNativeCommentHosts() {
-    const shell = document.querySelector(".btr-shell");
-    const hosts = new Set();
-
-    document.querySelectorAll("[data-btr-native-comment='true']").forEach((element) => {
-      if (!element.isConnected || element === shell || element.closest(".btr-shell") || element.contains(shell)) return;
-      hosts.add(element);
+  function cleanupStaleNativeMarkers() {
+    document.querySelectorAll("[data-btr-native-comment='true'], .btr-original-hidden").forEach((element) => {
+      restoreElementDisplay(element);
     });
-
-    if (hosts.size > 0) return [...hosts];
-
-    const fallbackHost = findCommentHost(false);
-    if (
-      fallbackHost &&
-      fallbackHost.isConnected &&
-      fallbackHost !== shell &&
-      !fallbackHost.closest(".btr-shell") &&
-      !fallbackHost.contains(shell)
-    ) {
-      hosts.add(fallbackHost);
-    }
-
-    return [...hosts];
   }
 
-  async function ensureNativeCommentApp() {
-    const host = document.querySelector("[data-btr-native-comment='true']") || document.querySelector("#commentapp");
-    if (!host || host.querySelector("bili-comments, bili-comments-v2, bb-comment")) return;
+  function getNativeCommentHost() {
+    if (
+      state.nativeCommentHost &&
+      state.nativeCommentHost.isConnected &&
+      state.nativeCommentHost.id === "commentapp"
+    ) {
+      return state.nativeCommentHost;
+    }
 
-    const aid = await ensureAid();
-    const comments = document.createElement("bili-comments");
-    comments.setAttribute("data-params", `${COMMENT_TYPE_VIDEO},${aid}`);
-    comments.setAttribute("lazy-load", "true");
-    comments.setAttribute("spm-prefix", "333.788");
-    comments.setAttribute("disable-up-actions", "true");
-    host.append(comments);
+    const host = document.querySelector("#commentapp");
+    if (!host || !isNativeCommentElement(host)) return null;
+    if (host.closest(PAGE_CHROME_SELECTOR)) return null;
+    state.nativeCommentHost = host;
+    return host;
   }
 
   function applyNativeVisibility() {
     const shell = document.querySelector(".btr-shell");
+    const host = getNativeCommentHost();
+    const nativeComponent = findNativeCommentComponent(host);
+
     if (shell) {
       shell.dataset.btrNativeVisible = state.nativeVisible ? "true" : "false";
       shell.classList.toggle("btr-shell--native-mode", state.nativeVisible);
     }
 
-    const hosts = findNativeCommentHosts();
-    hosts.forEach((element) => {
-      if (element.dataset.btrNativeDisplay == null) {
-        element.dataset.btrNativeDisplay = element.style.display || "";
+    if (nativeComponent) {
+      nativeComponent.dataset.btrNativeComment = "true";
+      if (nativeComponent.dataset.btrNativeDisplay == null) {
+        nativeComponent.dataset.btrNativeDisplay = nativeComponent.style.display || "";
       }
-      element.classList.toggle("btr-original-hidden", !state.nativeVisible);
 
       if (state.nativeVisible) {
-        const originalDisplay = element.dataset.btrNativeDisplay;
-        if (originalDisplay && originalDisplay !== "none") {
-          element.style.display = originalDisplay;
-        } else {
-          element.style.removeProperty("display");
-        }
+        restoreElementDisplay(nativeComponent);
+        state.nativeCommentHost = host;
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new Event("resize"));
+          window.dispatchEvent(new Event("scroll"));
+        });
       } else {
-        element.style.display = "none";
+        nativeComponent.classList.add("btr-original-hidden");
+        nativeComponent.style.display = "none";
       }
-    });
-
-    if (state.nativeVisible) {
-      requestAnimationFrame(() => {
-        window.dispatchEvent(new Event("resize"));
-        window.dispatchEvent(new Event("scroll"));
-      });
     }
 
     const toggle = document.querySelector("[data-action='toggle-native']");
     if (toggle) {
       toggle.textContent = state.nativeVisible ? "切换到树形评论" : "切换到原评论区";
-      toggle.title = hosts.length === 0 ? "暂未定位到原评论区" : "";
+      toggle.title = nativeComponent ? "" : "暂未定位到原评论区";
     }
+  }
 
-    console.info("[Bilibili Tree Replies] native visibility", {
-      visible: state.nativeVisible,
-      hosts: hosts.map((element) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return {
-          tag: element.tagName,
-          id: element.id,
-          className: element.className,
-          inlineDisplay: element.style.display,
-          computedDisplay: style.display,
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-          childCount: element.childElementCount,
-        };
-      }),
-    });
+  function syncLateNativeCommentComponent() {
+    const shell = document.querySelector(".btr-shell");
+    if (!shell) return false;
+
+    const host = getNativeCommentHost();
+    const nativeComponent = findNativeCommentComponent(host);
+    if (!nativeComponent) return true;
+
+    const shouldHide = !state.nativeVisible;
+    const hidden = nativeComponent.classList.contains("btr-original-hidden") || nativeComponent.style.display === "none";
+    if (shouldHide !== hidden) applyNativeVisibility();
+    return true;
   }
 
   function setupPanel() {
     if (document.querySelector(".btr-shell")) return;
 
-    const nativeHost = findCommentHost(false);
-    const fallbackHost = findCommentHost(true);
-    const host = nativeHost?.parentElement || fallbackHost;
+    const nativeHost = findCommentHost();
+    if (!nativeHost) return;
+
     console.info("[Bilibili Tree Replies] mount", {
       nativeHost: nativeHost?.tagName || "",
       nativeClass: nativeHost?.className || "",
@@ -867,15 +891,9 @@
       </div>
     `;
 
-    if (nativeHost?.parentElement) {
-      nativeHost.dataset.btrNativeComment = "true";
-      if (nativeHost.dataset.btrNativeDisplay == null) {
-        nativeHost.dataset.btrNativeDisplay = nativeHost.style.display || "";
-      }
-      nativeHost.parentElement.insertBefore(shell, nativeHost);
-    } else {
-      host.prepend(shell);
-    }
+    nativeHost.insertBefore(shell, nativeHost.firstChild);
+    state.nativeCommentHost = nativeHost;
+
     applyNativeVisibility();
     syncSortTabs();
 
@@ -901,11 +919,7 @@
       if (action === "toggle-native") {
         state.nativeVisible = !state.nativeVisible;
         applyNativeVisibility();
-        if (state.nativeVisible) {
-          ensureNativeCommentApp()
-            .then(() => applyNativeVisibility())
-            .catch((error) => console.warn("[Bilibili Tree Replies] native comment mount failed", error));
-        }
+        return;
       }
       if (action === "load-roots") loadRootComments();
       if (action === "sort-roots") {
@@ -945,6 +959,7 @@
 
   function init() {
     if (!/^\/video\/BV/.test(location.pathname)) return;
+    cleanupStaleNativeMarkers();
     if (document.querySelector(".btr-shell")) {
       if (!state.rootCursor.loaded && !state.rootCursor.loading && state.roots.length === 0) {
         loadRootComments();
@@ -958,26 +973,11 @@
 
   const mountObserver = new MutationObserver(() => {
     if (!/^\/video\/BV/.test(location.pathname)) return;
-    const currentNativeHost = findCommentHost(false);
-    const shell = document.querySelector(".btr-shell");
-    if (
-      currentNativeHost &&
-      !currentNativeHost.dataset.btrNativeComment &&
-      !currentNativeHost.closest(".btr-shell") &&
-      !currentNativeHost.contains(shell)
-    ) {
-      currentNativeHost.dataset.btrNativeComment = "true";
-      applyNativeVisibility();
-    }
+    if (syncLateNativeCommentComponent()) return;
+    const currentNativeHost = findCommentHost();
     if (!document.querySelector(".btr-shell") && currentNativeHost) setupPanel();
   });
   mountObserver.observe(document.documentElement, { childList: true, subtree: true });
-
-  setTimeout(() => {
-    if (/^\/video\/BV/.test(location.pathname) && !document.querySelector(".btr-shell")) {
-      setupPanel();
-    }
-  }, 5000);
 
   let lastHref = location.href;
   let lastVideoId = getBvidFromUrl();
@@ -997,6 +997,7 @@
     state.replyStores.clear();
     state.autoReplyQueueRunning = false;
     state.nativeVisible = false;
+    state.nativeCommentHost = null;
     resetRootComments(3);
     syncSortTabs();
     render();

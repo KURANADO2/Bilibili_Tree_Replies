@@ -945,6 +945,12 @@
 
   function init() {
     if (!/^\/video\/BV/.test(location.pathname)) return;
+    if (document.querySelector(".btr-shell")) {
+      if (!state.rootCursor.loaded && !state.rootCursor.loading && state.roots.length === 0) {
+        loadRootComments();
+      }
+      return;
+    }
     if (findCommentHost()) setupPanel();
   }
 
@@ -974,11 +980,19 @@
   }, 5000);
 
   let lastHref = location.href;
+  let lastVideoId = getBvidFromUrl();
   setInterval(() => {
     if (location.href === lastHref) return;
     lastHref = location.href;
+    const nextVideoId = getBvidFromUrl();
+    if (nextVideoId === lastVideoId) {
+      applyNativeVisibility();
+      init();
+      return;
+    }
+    lastVideoId = nextVideoId;
     state.aid = null;
-    state.bvid = null;
+    state.bvid = nextVideoId || null;
     state.roots = [];
     state.replyStores.clear();
     state.autoReplyQueueRunning = false;

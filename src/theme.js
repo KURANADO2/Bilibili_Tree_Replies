@@ -141,6 +141,10 @@
     const shell = document.querySelector(".btr-shell");
     if (!shell) return;
 
+    // 原评论区可见时面板处于隐藏状态，主题无意义；跳过采样，
+    // 避免在原生评论的渲染风暴窗口里叠加强制样式重算
+    if (shell.classList.contains("btr-shell--native-mode")) return;
+
     const mode = readMode();
     // 手动模式无需感知页面，跳过采样以避免无谓的强制样式重算
     const pageIsDark = mode === "auto" ? detectPageDark() : false;

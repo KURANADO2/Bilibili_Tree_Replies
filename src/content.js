@@ -1048,6 +1048,7 @@
       if (action === "toggle-native") {
         state.nativeVisible = !state.nativeVisible;
         applyNativeVisibility();
+        if (window.BtrTheme) window.BtrTheme.applyTheme();
         return;
       }
       if (action === "load-roots") loadRootComments();

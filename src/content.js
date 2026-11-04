@@ -1003,6 +1003,7 @@
             <div class="btr-status">正在准备评论</div>
           </div>
           <div class="btr-header-actions">
+            <button class="btr-link-button" type="button" data-action="toggle-theme">主题：自动</button>
             <button class="btr-link-button" type="button" data-action="toggle-native">切换到原评论区</button>
             <button class="btr-link-button" type="button" data-action="refresh">刷新树形评论</button>
           </div>
@@ -1017,6 +1018,7 @@
     nativeHost.insertBefore(shell, nativeHost.firstChild);
     state.nativeCommentHost = nativeHost;
 
+    if (window.BtrTheme) window.BtrTheme.applyTheme();
     applyNativeVisibility();
     syncSortTabs();
 
@@ -1037,6 +1039,10 @@
       if (action === "cancel-reply") {
         state.activeReplyId = "";
         render();
+        return;
+      }
+      if (action === "toggle-theme") {
+        if (window.BtrTheme) window.BtrTheme.cycleMode();
         return;
       }
       if (action === "toggle-native") {

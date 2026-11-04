@@ -78,20 +78,47 @@ test("isDarkRgb 判定深色与浅色", () => {
   assert.equal(isDarkRgb({ r: 241, g: 242, b: 243 }), false);
 });
 
-test("isPageDark 在 Dark Reader 动态模式下判定为暗色", () => {
-  assert.equal(isPageDark({ darkReaderMode: "dynamic", sample: "rgb(255, 255, 255)" }), true);
+test("isPageDark 在 Dark Reader 暗色标记下判定为暗色，即使采样为亮色", () => {
+  assert.equal(
+    isPageDark({ darkReaderScheme: "dark", samples: ["rgb(255, 255, 255)"] }),
+    true
+  );
 });
 
-test("isPageDark 在 Dark Reader 滤镜模式下不判定为暗色（滤镜已整体反色）", () => {
-  assert.equal(isPageDark({ darkReaderMode: "filter", sample: "rgb(255, 255, 255)" }), false);
+test("isPageDark 忽略非暗色的 Dark Reader 标记值", () => {
+  assert.equal(
+    isPageDark({ darkReaderScheme: "light", samples: ["rgb(255, 255, 255)"] }),
+    false
+  );
 });
 
 test("isPageDark 依据采样背景色判定暗色", () => {
-  assert.equal(isPageDark({ darkReaderMode: null, sample: "rgb(16, 16, 16)" }), true);
-  assert.equal(isPageDark({ darkReaderMode: null, sample: "rgb(255, 255, 255)" }), false);
+  assert.equal(isPageDark({ darkReaderScheme: null, samples: ["rgb(16, 16, 16)"] }), true);
+  assert.equal(isPageDark({ darkReaderScheme: null, samples: ["rgb(255, 255, 255)"] }), false);
 });
 
-test("isPageDark 忽略全透明采样（视为无背景信号）", () => {
-  assert.equal(isPageDark({ darkReaderMode: null, sample: "rgba(0, 0, 0, 0)" }), false);
-  assert.equal(isPageDark({ darkReaderMode: null, sample: null }), false);
+test("isPageDark 跳过全透明采样，命中更上层的暗色背景", () => {
+  assert.equal(
+    isPageDark({ darkReaderScheme: null, samples: ["rgba(0, 0, 0, 0)", "rgb(24, 25, 28)"] }),
+    true
+  );
+  assert.equal(
+    isPageDark({ darkReaderScheme: null, samples: ["rgba(0, 0, 0, 0)", "rgb(255, 255, 255)"] }),
+    false
+  );
+});
+
+test("isPageDark 覆盖只暗化内容容器的插件（body 透明、容器暗）", () => {
+  assert.equal(
+    isPageDark({
+      darkReaderScheme: null,
+      samples: ["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)", "rgb(35, 36, 39)"],
+    }),
+    true
+  );
+});
+
+test("isPageDark 对空采样与 null 采样返回亮色", () => {
+  assert.equal(isPageDark({ darkReaderScheme: null, samples: [] }), false);
+  assert.equal(isPageDark({ darkReaderScheme: null, samples: [null] }), false);
 });

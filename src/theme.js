@@ -79,11 +79,14 @@
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
   }
 
-  function isPageDark({ darkReaderMode, sample }) {
-    if (darkReaderMode === "dynamic") return true;
-    const color = parseCssColor(sample);
-    if (!color || color.a <= 0) return false;
-    return isDarkRgb(color);
+  function isPageDark({ darkReaderScheme, samples }) {
+    if (darkReaderScheme === "dark") return true;
+    for (const sample of samples || []) {
+      const color = parseCssColor(sample);
+      if (!color || color.a <= 0) continue;
+      return isDarkRgb(color);
+    }
+    return false;
   }
 
   function readMode() {
@@ -102,34 +105,55 @@
     }
   }
 
-  function samplePageBackground() {
-    let element = document.body;
-    while (element) {
-      const color = window.getComputedStyle(element).backgroundColor;
+  const SAMPLE_ANCHOR_SELECTORS = ["#commentapp", "#app"];
+  const MAX_BACKGROUND_WALK = 6;
+
+  function sampleEffectiveBackground(element) {
+    let current = element;
+    for (let depth = 0; current && depth < MAX_BACKGROUND_WALK; depth += 1) {
+      const color = window.getComputedStyle(current).backgroundColor;
       const parsed = parseCssColor(color);
       if (parsed && parsed.a > 0) return color;
-      element = element.parentElement;
+      current = current.parentElement;
     }
     return null;
   }
 
+  function collectPageSamples() {
+    // 面板挂载在 #commentapp 内，优先取面板所在位置的等效背景，
+    // 再取内容容器，最后才是 body：保证「只暗化内容容器」的插件也能命中
+    const anchors = [];
+    for (const selector of SAMPLE_ANCHOR_SELECTORS) {
+      anchors.push(document.querySelector(selector));
+    }
+    anchors.push(document.body);
+    return anchors.filter(Boolean).map(sampleEffectiveBackground);
+  }
+
   function detectPageDark() {
     return isPageDark({
-      darkReaderMode: document.documentElement.getAttribute("data-darkreader-mode"),
-      sample: samplePageBackground(),
+      darkReaderScheme: document.documentElement.getAttribute("data-darkreader-scheme"),
+      samples: collectPageSamples(),
     });
   }
 
   function applyTheme() {
-    const mode = readMode();
     const shell = document.querySelector(".btr-shell");
     if (!shell) return;
 
-    shell.setAttribute("data-btr-theme", resolveTheme(mode, detectPageDark()));
+    const mode = readMode();
+    // 手动模式无需感知页面，跳过采样以避免无谓的强制样式重算
+    const pageIsDark = mode === "auto" ? detectPageDark() : false;
+    const resolved = resolveTheme(mode, pageIsDark);
+
+    // 幂等写入：值未变化时不碰 DOM，避免搅动页面观察器与夜间插件
+    if (shell.getAttribute("data-btr-theme") !== resolved) {
+      shell.setAttribute("data-btr-theme", resolved);
+    }
     const toggle = shell.querySelector("[data-action='toggle-theme']");
     if (toggle) {
-      toggle.textContent = MODE_LABELS[mode];
-      toggle.title = MODE_TITLES[mode];
+      if (toggle.textContent !== MODE_LABELS[mode]) toggle.textContent = MODE_LABELS[mode];
+      if (toggle.title !== MODE_TITLES[mode]) toggle.title = MODE_TITLES[mode];
     }
   }
 
@@ -142,22 +166,12 @@
   function start() {
     applyTheme();
 
-    // 兜底轮询：夜间插件仅注入样式表而不改属性时，1 秒内也能跟上
+    // 检测节奏与页面变化解耦：固定间隔采样，强制样式重算频率有上限。
+    // 早先版本用 MutationObserver 跟随 html/body 属性变化，页面每变一次属性
+    // 就触发一次强制重算与 DOM 写入，在 B 站这类高频变化的页面上放大成主线程饱和
     window.setInterval(() => {
       if (readMode() === "auto") applyTheme();
-    }, 1000);
-
-    const observer = new MutationObserver(() => applyTheme());
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "style", "data-theme", "data-darkreader-mode"],
-    });
-    if (document.body) {
-      observer.observe(document.body, {
-        attributes: true,
-        attributeFilter: ["class", "style", "data-theme"],
-      });
-    }
+    }, 2000);
   }
 
   return {

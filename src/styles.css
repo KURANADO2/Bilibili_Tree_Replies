@@ -192,6 +192,34 @@
   white-space: normal;
 }
 
+.btr-pictures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btr-picture-link {
+  display: block;
+  line-height: 0;
+}
+
+.btr-picture {
+  background: #f1f2f3;
+  border: 1px solid #e3e5e7;
+  border-radius: 6px;
+  display: block;
+  height: auto;
+  max-height: 160px;
+  max-width: 220px;
+  object-fit: cover;
+  width: auto;
+}
+
+.btr-picture:hover {
+  border-color: #00aeec;
+}
+
 .btr-meta {
   color: #9499a0;
   display: flex;

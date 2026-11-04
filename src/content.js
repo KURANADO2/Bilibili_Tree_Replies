@@ -1,6 +1,5 @@
 (() => {
   const COMMENT_TYPE_VIDEO = 1;
-  const ROOT_PAGE_SIZE = 20;
   const REPLY_PAGE_SIZE = 20;
   const MAX_INDENT_DEPTH = 4;
 
@@ -12,7 +11,7 @@
       loading: false,
       error: "",
       mode: 3,
-      page: 0,
+      offset: "",
       total: 0,
       isEnd: false,
     },
@@ -171,6 +170,22 @@
     return state.aid;
   }
 
+  function normalizeImageUrl(url) {
+    if (!url) return "";
+    return String(url).replace(/^http:\/\//i, "https://");
+  }
+
+  function normalizePictures(pictures) {
+    if (!Array.isArray(pictures)) return [];
+    return pictures
+      .map((pic) => ({
+        src: normalizeImageUrl(pic?.img_src),
+        width: Number(pic?.img_width || 0),
+        height: Number(pic?.img_height || 0),
+      }))
+      .filter((pic) => pic.src);
+  }
+
   function normalizeReply(reply) {
     const id = String(reply.rpid_str || reply.rpid);
     const rootId = String(reply.root_str || reply.root || id);
@@ -195,9 +210,10 @@
       disliked: Number(reply.hate_action || 0) === 1,
       actionError: "",
       ctime: Number(reply.ctime || 0),
-      count: Number(reply.count || reply.rcount || 0),
+      count: Number(reply.rcount || reply.count || 0),
       timeText: reply.reply_control?.time_desc || formatTime(reply.ctime),
       parentName: reply.parent_reply_member?.name || "",
+      pictures: normalizePictures(reply.content?.pictures),
     };
   }
 
@@ -223,6 +239,19 @@
 
   function renderMessage(message) {
     return escapeHtml(message).replace(/\n/g, "<br>");
+  }
+
+  function renderPictures(pictures) {
+    if (!pictures || !pictures.length) return "";
+    const items = pictures.map((pic) => {
+      const ratio = pic.width && pic.height ? ` style="aspect-ratio:${pic.width}/${pic.height}"` : "";
+      return `
+        <a class="btr-picture-link" href="${escapeHtml(pic.src)}" target="_blank" rel="noopener noreferrer">
+          <img class="btr-picture" src="${escapeHtml(pic.src)}" alt="评论图片" loading="lazy"${ratio}>
+        </a>
+      `;
+    }).join("");
+    return `<div class="btr-pictures">${items}</div>`;
   }
 
   function cleanReplyPrefix(message) {
@@ -300,7 +329,7 @@
       loading: false,
       error: "",
       mode,
-      page: 0,
+      offset: "",
       total: 0,
       isEnd: false,
     };
@@ -318,14 +347,25 @@
 
     try {
       const aid = await ensureAid();
-      const nextPage = state.rootCursor.page + 1;
-      const data = await apiGet("/x/v2/reply", {
+      const params = {
         type: COMMENT_TYPE_VIDEO,
         oid: aid,
-        pn: nextPage,
-        ps: ROOT_PAGE_SIZE,
-        sort: state.rootCursor.mode === 3 ? 2 : 0,
-      });
+        mode: state.rootCursor.mode,
+        plat: 1,
+        web_location: 1315875,
+        pagination_str: JSON.stringify({ offset: state.rootCursor.offset || "" }),
+      };
+
+      let data;
+      // 优先走页面上下文（与原生网页同源、同 cookie），可避免扩展 background
+      // 以 chrome-extension:// 源请求时被风控静默截断（返回 code 0 但只给少量根评论）。
+      // 页面桥接不可用时再退回 background。
+      try {
+        data = await apiGetFromPage("/x/v2/reply/main", params);
+      } catch (pageError) {
+        data = await apiGet("/x/v2/reply/main", params);
+      }
+
       const incoming = (data.replies || []).map(normalizeReply);
       const seen = new Set(state.roots.map((reply) => reply.id));
       incoming.forEach((reply) => {
@@ -335,10 +375,10 @@
         }
       });
 
-      const page = data.page || {};
-      state.rootCursor.page = nextPage;
-      state.rootCursor.total = Number(page.count || state.rootCursor.total || state.roots.length);
-      state.rootCursor.isEnd = incoming.length === 0 || state.roots.length >= state.rootCursor.total;
+      const cursor = data.cursor || {};
+      state.rootCursor.offset = cursor.pagination_reply?.next_offset || "";
+      state.rootCursor.total = Number(cursor.all_count || state.rootCursor.total || state.roots.length);
+      state.rootCursor.isEnd = Boolean(cursor.is_end) || incoming.length === 0;
       state.rootCursor.loaded = true;
       autoLoadReplyPages(incoming);
     } catch (error) {
@@ -443,10 +483,9 @@
       };
       let data;
       try {
-        data = await apiGet("/x/v2/reply/reply", replyParams);
-      } catch (error) {
-        if (!(error.message || "").includes("412")) throw error;
         data = await apiGetFromPage("/x/v2/reply/reply", replyParams);
+      } catch (pageError) {
+        data = await apiGet("/x/v2/reply/reply", replyParams);
       }
 
       const replies = (data.replies || []).map(normalizeReply);
@@ -624,6 +663,7 @@
         <div class="btr-node-body">
           ${renderAuthor(node)}
           <div class="btr-message">${renderMessage(node.message)}</div>
+          ${renderPictures(node.pictures)}
           ${renderMeta(node)}
           ${node.actionError ? `<div class="btr-error">${escapeHtml(node.actionError)}</div>` : ""}
           ${renderReplyForm(node)}
@@ -655,6 +695,7 @@
         <div class="btr-root-main">
           ${renderAuthor(root)}
           <div class="btr-message">${renderMessage(root.message)}</div>
+          ${renderPictures(root.pictures)}
           ${renderMeta(root, { replyText: root.count ? `${root.count} 回复` : "回复" })}
           ${root.actionError ? `<div class="btr-error">${escapeHtml(root.actionError)}</div>` : ""}
           ${renderReplyForm(root)}
@@ -669,6 +710,14 @@
         ${tree}
       </section>
     `;
+  }
+
+  function countLoadedNodes() {
+    let count = state.roots.length;
+    for (const store of state.replyStores.values()) {
+      count += store.nodes.size;
+    }
+    return count;
   }
 
   function render() {
@@ -686,7 +735,8 @@
       status.textContent = "正在加载评论...";
       status.classList.remove("btr-status--error");
     } else {
-      status.textContent = state.roots.length ? `已加载 ${state.roots.length}/${state.rootCursor.total || "?"} 条评论` : "正在准备评论";
+      const loadedNodes = countLoadedNodes();
+      status.textContent = state.roots.length ? `已加载 ${loadedNodes}/${state.rootCursor.total || "?"} 条评论` : "正在准备评论";
       status.classList.remove("btr-status--error");
     }
 

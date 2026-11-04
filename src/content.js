@@ -2,6 +2,8 @@
   const COMMENT_TYPE_VIDEO = 1;
   const REPLY_PAGE_SIZE = 20;
   const MAX_INDENT_DEPTH = 4;
+  const MAX_AUTO_ROOT_PAGES = 10;
+  const ROOT_PAGE_INTERVAL_MS = 300;
 
   const state = {
     aid: null,
@@ -9,6 +11,8 @@
     rootCursor: {
       loaded: false,
       loading: false,
+      paging: false,
+      truncated: false,
       error: "",
       mode: 3,
       offset: "",
@@ -17,10 +21,12 @@
     },
     roots: [],
     replyStores: new Map(),
+    autoReplyQueue: [],
     autoReplyQueueRunning: false,
     nativeVisible: false,
     nativeCommentHost: null,
     activeReplyId: "",
+    storeGeneration: 0,
     pageBridgeReady: false,
     pageBridgeReadyPromise: null,
     pageBridgeSeq: 0,
@@ -327,6 +333,8 @@
     state.rootCursor = {
       loaded: false,
       loading: false,
+      paging: false,
+      truncated: false,
       error: "",
       mode,
       offset: "",
@@ -335,56 +343,97 @@
     };
     state.roots = [];
     state.replyStores.clear();
+    state.autoReplyQueue = [];
     state.autoReplyQueueRunning = false;
+    state.storeGeneration += 1;
     state.activeReplyId = "";
   }
 
+  function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  // 依据已加载根评论的 rcount 估算全树规模，与 all_count 差距过大说明
+  // 接口返回被风控静默截断（code 0、is_end=true，但列表不完整）
+  function isRootListTruncated() {
+    const total = state.rootCursor.total;
+    if (!total || !state.roots.length) return false;
+    let expected = 0;
+    for (const root of state.roots) {
+      expected += 1 + (root.count || 0);
+    }
+    const gap = total - expected;
+    return gap > Math.max(3, Math.ceil(total * 0.1));
+  }
+
+  async function fetchRootPage(aid) {
+    const params = {
+      type: COMMENT_TYPE_VIDEO,
+      oid: aid,
+      mode: state.rootCursor.mode,
+      plat: 1,
+      web_location: 1315875,
+      pagination_str: JSON.stringify({ offset: state.rootCursor.offset || "" }),
+    };
+
+    // 优先走页面上下文（与原生网页同源、同 cookie），可避免扩展 background
+    // 以 chrome-extension:// 源请求时被风控静默截断。桥接不可用时退回 background。
+    try {
+      return await apiGetFromPage("/x/v2/reply/main", params);
+    } catch (pageError) {
+      return await apiGet("/x/v2/reply/main", params);
+    }
+  }
+
   async function loadRootComments() {
-    if (state.rootCursor.loading || state.rootCursor.isEnd) return;
-    state.rootCursor.loading = true;
+    if (state.rootCursor.loading || state.rootCursor.paging || state.rootCursor.isEnd) return;
+    state.rootCursor.paging = true;
     state.rootCursor.error = "";
-    render();
+    state.rootCursor.truncated = false;
 
     try {
       const aid = await ensureAid();
-      const params = {
-        type: COMMENT_TYPE_VIDEO,
-        oid: aid,
-        mode: state.rootCursor.mode,
-        plat: 1,
-        web_location: 1315875,
-        pagination_str: JSON.stringify({ offset: state.rootCursor.offset || "" }),
-      };
 
-      let data;
-      // 优先走页面上下文（与原生网页同源、同 cookie），可避免扩展 background
-      // 以 chrome-extension:// 源请求时被风控静默截断（返回 code 0 但只给少量根评论）。
-      // 页面桥接不可用时再退回 background。
-      try {
-        data = await apiGetFromPage("/x/v2/reply/main", params);
-      } catch (pageError) {
-        data = await apiGet("/x/v2/reply/main", params);
-      }
+      for (let pageNo = 0; pageNo < MAX_AUTO_ROOT_PAGES; pageNo++) {
+        state.rootCursor.loading = true;
+        render();
 
-      const incoming = (data.replies || []).map(normalizeReply);
-      const seen = new Set(state.roots.map((reply) => reply.id));
-      incoming.forEach((reply) => {
-        if (!seen.has(reply.id)) {
-          state.roots.push(reply);
-          seen.add(reply.id);
+        let data;
+        try {
+          data = await fetchRootPage(aid);
+        } finally {
+          state.rootCursor.loading = false;
         }
-      });
 
-      const cursor = data.cursor || {};
-      state.rootCursor.offset = cursor.pagination_reply?.next_offset || "";
-      state.rootCursor.total = Number(cursor.all_count || state.rootCursor.total || state.roots.length);
-      state.rootCursor.isEnd = Boolean(cursor.is_end) || incoming.length === 0;
-      state.rootCursor.loaded = true;
-      autoLoadReplyPages(incoming);
+        const incoming = (data.replies || []).map(normalizeReply);
+        const seen = new Set(state.roots.map((reply) => reply.id));
+        incoming.forEach((reply) => {
+          if (!seen.has(reply.id)) {
+            state.roots.push(reply);
+            seen.add(reply.id);
+          }
+        });
+
+        const cursor = data.cursor || {};
+        state.rootCursor.offset = cursor.pagination_reply?.next_offset || "";
+        state.rootCursor.total = Number(cursor.all_count || state.rootCursor.total || state.roots.length);
+        state.rootCursor.loaded = true;
+        render();
+        autoLoadReplyPages(incoming);
+
+        const endClaimed = Boolean(cursor.is_end) || incoming.length === 0;
+        if (endClaimed || !state.rootCursor.offset) {
+          state.rootCursor.truncated = isRootListTruncated();
+          state.rootCursor.isEnd = !state.rootCursor.truncated && endClaimed;
+          break;
+        }
+        await sleep(ROOT_PAGE_INTERVAL_MS);
+      }
     } catch (error) {
       state.rootCursor.error = error.message || String(error);
     } finally {
       state.rootCursor.loading = false;
+      state.rootCursor.paging = false;
       render();
     }
   }
@@ -513,23 +562,41 @@
     render();
   }
 
-  async function autoLoadReplyPages(roots) {
+  function autoLoadReplyPages(roots) {
+    for (const root of roots) {
+      if (!state.autoReplyQueue.some((item) => item.id === root.id)) {
+        state.autoReplyQueue.push(root);
+      }
+    }
+    runAutoReplyQueue();
+  }
+
+  function runAutoReplyQueue() {
     if (state.autoReplyQueueRunning) return;
     state.autoReplyQueueRunning = true;
+    const generation = state.storeGeneration;
 
-    try {
-      for (const root of roots) {
-        const store = getReplyStore(root);
-        if (store.autoLoaded || store.loading || store.isEnd || root.count <= 0) continue;
-        seedPreviewReplies(root);
-        if (store.isEnd) continue;
-        store.autoLoaded = true;
-        await loadReplies(root, { silent: true });
+    (async () => {
+      try {
+        while (state.autoReplyQueue.length) {
+          // 状态已被重置（切换排序 / 刷新 / 换视频），旧代际队列停止，交给新 runner
+          if (generation !== state.storeGeneration) break;
+          const root = state.autoReplyQueue.shift();
+          const store = getReplyStore(root);
+          if (store.autoLoaded || store.loading || store.isEnd || root.count <= 0) continue;
+          seedPreviewReplies(root);
+          if (store.isEnd) continue;
+          store.autoLoaded = true;
+          await loadReplies(root, { silent: true });
+          // 每完成一棵回复树就刷新状态文案，让「已加载 X/Y」实时增长
+          render();
+        }
+      } finally {
+        state.autoReplyQueueRunning = false;
+        render();
       }
-    } finally {
-      state.autoReplyQueueRunning = false;
-      render();
-    }
+      if (state.autoReplyQueue.length) runAutoReplyQueue();
+    })();
   }
 
   function seedPreviewReplies(root) {
@@ -728,19 +795,25 @@
     const status = panel.querySelector(".btr-status");
     const loadMore = panel.querySelector("[data-action='load-roots']");
 
+    const busy = state.rootCursor.loading || state.rootCursor.paging;
     if (state.rootCursor.error) {
       status.textContent = state.rootCursor.error;
       status.classList.add("btr-status--error");
-    } else if (state.rootCursor.loading) {
+    } else if (busy && !state.roots.length) {
       status.textContent = "正在加载评论...";
       status.classList.remove("btr-status--error");
-    } else {
+    } else if (state.roots.length) {
       const loadedNodes = countLoadedNodes();
-      status.textContent = state.roots.length ? `已加载 ${loadedNodes}/${state.rootCursor.total || "?"} 条评论` : "正在准备评论";
+      const busyText = busy ? "（加载中…）" : "";
+      const truncatedText = state.rootCursor.truncated ? "，疑似被风控截断，点击「更多评论」重试" : "";
+      status.textContent = `已加载 ${loadedNodes}/${state.rootCursor.total || "?"} 条评论${busyText}${truncatedText}`;
+      status.classList.remove("btr-status--error");
+    } else {
+      status.textContent = "正在准备评论";
       status.classList.remove("btr-status--error");
     }
 
-    loadMore.disabled = state.rootCursor.loading || state.rootCursor.isEnd;
+    loadMore.disabled = busy || state.rootCursor.isEnd;
     loadMore.textContent = state.rootCursor.isEnd ? "没有更多评论" : "更多评论";
     list.innerHTML = state.roots.map(renderRoot).join("");
 

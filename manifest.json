@@ -33,6 +33,7 @@
       ],
       "js": [
         "src/theme.js",
+        "src/reply-utils.js",
         "src/content.js"
       ],
       "css": [

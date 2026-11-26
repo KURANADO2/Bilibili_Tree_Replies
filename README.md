@@ -6,6 +6,12 @@
 
 ## 使用
 
+### 方式一 应用商店
+
+1. Chrome 应用商店安装：[Bilibili Tree Replies](https://chromewebstore.google.com/detail/bilibili-tree-replies/icbigbahlkopfiejanaeafkbjgfeohpp/reviews?hl=zh-CN&utm_source=ext_sidebar)
+
+### 方式二 源码安装
+
 1. 打开 Chrome 扩展管理页：`chrome://extensions/`
 2. 开启“开发者模式”
 3. 点击“加载已解压的扩展程序”

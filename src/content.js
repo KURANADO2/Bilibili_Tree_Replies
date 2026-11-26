@@ -2,8 +2,6 @@
   const COMMENT_TYPE_VIDEO = 1;
   const REPLY_PAGE_SIZE = 20;
   const MAX_INDENT_DEPTH = 4;
-  const MAX_AUTO_ROOT_PAGES = 10;
-  const ROOT_PAGE_INTERVAL_MS = 300;
 
   // 依赖 manifest 脚本顺序，reply-utils.js 先于本文件执行
   const { normalizeLocation, resolveMaxLine, canAutoLoadRoots } = window.BtrReplyUtils;
@@ -354,10 +352,6 @@
     state.activeReplyId = "";
   }
 
-  function sleep(ms) {
-    return new Promise((resolve) => window.setTimeout(resolve, ms));
-  }
-
   // 依据已加载根评论的 rcount 估算全树规模，与 all_count 差距过大说明
   // 接口返回被风控静默截断（code 0、is_end=true，但列表不完整）
   function isRootListTruncated() {
@@ -390,6 +384,8 @@
     }
   }
 
+  // 每次调用最多加载 1 页；连续翻页由滚动触底（IntersectionObserver）
+  // 或「更多评论」按钮驱动，截断/出错态只允许手动重试
   async function loadRootComments() {
     if (state.rootCursor.loading || state.rootCursor.paging || state.rootCursor.isEnd) return;
     state.rootCursor.paging = true;
@@ -399,40 +395,36 @@
     try {
       const aid = await ensureAid();
 
-      for (let pageNo = 0; pageNo < MAX_AUTO_ROOT_PAGES; pageNo++) {
-        state.rootCursor.loading = true;
-        render();
+      state.rootCursor.loading = true;
+      render();
 
-        let data;
-        try {
-          data = await fetchRootPage(aid);
-        } finally {
-          state.rootCursor.loading = false;
+      let data;
+      try {
+        data = await fetchRootPage(aid);
+      } finally {
+        state.rootCursor.loading = false;
+      }
+
+      const incoming = (data.replies || []).map(normalizeReply);
+      const seen = new Set(state.roots.map((reply) => reply.id));
+      incoming.forEach((reply) => {
+        if (!seen.has(reply.id)) {
+          state.roots.push(reply);
+          seen.add(reply.id);
         }
+      });
 
-        const incoming = (data.replies || []).map(normalizeReply);
-        const seen = new Set(state.roots.map((reply) => reply.id));
-        incoming.forEach((reply) => {
-          if (!seen.has(reply.id)) {
-            state.roots.push(reply);
-            seen.add(reply.id);
-          }
-        });
+      const cursor = data.cursor || {};
+      state.rootCursor.offset = cursor.pagination_reply?.next_offset || "";
+      state.rootCursor.total = Number(cursor.all_count || state.rootCursor.total || state.roots.length);
+      state.rootCursor.loaded = true;
+      render();
+      autoLoadReplyPages(incoming);
 
-        const cursor = data.cursor || {};
-        state.rootCursor.offset = cursor.pagination_reply?.next_offset || "";
-        state.rootCursor.total = Number(cursor.all_count || state.rootCursor.total || state.roots.length);
-        state.rootCursor.loaded = true;
-        render();
-        autoLoadReplyPages(incoming);
-
-        const endClaimed = Boolean(cursor.is_end) || incoming.length === 0;
-        if (endClaimed || !state.rootCursor.offset) {
-          state.rootCursor.truncated = isRootListTruncated();
-          state.rootCursor.isEnd = !state.rootCursor.truncated && endClaimed;
-          break;
-        }
-        await sleep(ROOT_PAGE_INTERVAL_MS);
+      const endClaimed = Boolean(cursor.is_end) || incoming.length === 0;
+      if (endClaimed || !state.rootCursor.offset) {
+        state.rootCursor.truncated = isRootListTruncated();
+        state.rootCursor.isEnd = !state.rootCursor.truncated && endClaimed;
       }
     } catch (error) {
       state.rootCursor.error = error.message || String(error);
@@ -1022,6 +1014,21 @@
 
     nativeHost.insertBefore(shell, nativeHost.firstChild);
     state.nativeCommentHost = nativeHost;
+
+    // 滚动触底自动翻页；observer 生命周期与面板一致（面板常驻，换视频不重建）。
+    // 原生评论区模式下 footer 为 display:none，无布局盒不产生回调，天然挂起；
+    // 每完成一页后重新观察，footer 仍在视口附近时补发回调形成连续翻页，
+    // 门控（忙/到底/截断/出错）保证不会越过边界自动重试
+    const footer = shell.querySelector(".btr-footer");
+    const scrollObserver = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      if (!canAutoLoadRoots(state.rootCursor)) return;
+      loadRootComments().finally(() => {
+        scrollObserver.unobserve(footer);
+        scrollObserver.observe(footer);
+      });
+    }, { rootMargin: "300px 0px" });
+    if (footer) scrollObserver.observe(footer);
 
     if (window.BtrTheme) window.BtrTheme.applyTheme();
     applyNativeVisibility();

@@ -931,9 +931,11 @@
       for (let node = meta.nextElementSibling; node; node = node.nextElementSibling) items.push(node);
       return items;
     };
+    // 必须在 freshMeta 被移入 liveMain 之前取尾段，否则 freshMain 里查不到 meta
+    const freshTail = tailOf(freshMeta);
+    if (liveMeta.outerHTML !== freshMeta.outerHTML) liveMeta.replaceWith(freshMeta);
     const currentMeta = liveMain.querySelector(":scope > .btr-meta");
     const liveTail = tailOf(currentMeta);
-    const freshTail = tailOf(freshMain.querySelector(":scope > .btr-meta"));
     const liveHtml = liveTail.map((node) => node.outerHTML).join("");
     const freshHtml = freshTail.map((node) => node.outerHTML).join("");
     if (liveHtml !== freshHtml) {

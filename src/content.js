@@ -266,13 +266,15 @@
     return message.replace(/^\s*回复\s*@[^:：\s]+(?:\s*)[:：]\s*/, "");
   }
 
-  function renderAvatar(reply) {
-    if (!reply.avatar) return "";
+  function renderAvatarColumn(reply) {
+    if (!reply.avatar) return `<div class="btr-avatar-col"></div>`;
     return `
-      <span class="btr-avatar-wrap">
-        <img class="btr-avatar" src="${escapeHtml(reply.avatar)}" alt="">
-        ${reply.isVip ? `<span class="btr-vip-mark">大</span>` : ""}
-      </span>
+      <div class="btr-avatar-col">
+        <span class="btr-avatar-wrap">
+          <img class="btr-avatar" src="${escapeHtml(reply.avatar)}" alt="">
+          ${reply.isVip ? `<span class="btr-vip-mark">大</span>` : ""}
+        </span>
+      </div>
     `;
   }
 
@@ -281,11 +283,10 @@
     return `<span class="btr-level btr-level-${reply.level}">LV${reply.level}</span>`;
   }
 
-  function renderAuthor(reply, extra = "") {
+  function renderAuthorLine(reply, extra = "") {
     const style = reply.nameColor ? ` style="color:${escapeHtml(reply.nameColor)}"` : "";
     return `
       <div class="btr-author-row">
-        ${renderAvatar(reply)}
         <span class="btr-author"${style}>${escapeHtml(reply.userName)}</span>
         ${renderLevel(reply)}
         ${extra}
@@ -732,13 +733,16 @@
     return `
       <article class="btr-node${deepClass}" style="--btr-depth:${visibleDepth}">
         <div class="btr-node-line"></div>
-        <div class="btr-node-body">
-          ${renderAuthor(node)}
-          <div class="btr-message">${renderMessage(node.message)}</div>
-          ${renderPictures(node.pictures)}
-          ${renderMeta(node)}
-          ${node.actionError ? `<div class="btr-error">${escapeHtml(node.actionError)}</div>` : ""}
-          ${renderReplyForm(node)}
+        <div class="btr-node-row">
+          ${renderAvatarColumn(node)}
+          <div class="btr-node-body">
+            ${renderAuthorLine(node)}
+            <div class="btr-message">${renderMessage(node.message)}</div>
+            ${renderPictures(node.pictures)}
+            ${renderMeta(node)}
+            ${node.actionError ? `<div class="btr-error">${escapeHtml(node.actionError)}</div>` : ""}
+            ${renderReplyForm(node)}
+          </div>
         </div>
         ${children}
       </article>
@@ -757,6 +761,7 @@
           <div class="btr-actions">
             ${store.loading ? `<span class="btr-muted">正在加载回复...</span>` : ""}
             ${!store.loading && !store.isEnd && !store.limitedByApi ? `<button class="btr-link-button" data-action="load-replies" data-root-id="${root.id}">加载更多回复 ${replySummary}</button>` : ""}
+            <button class="btr-link-button" data-action="toggle-root" data-root-id="${root.id}">收起相关回复</button>
           </div>
         </div>
       `
@@ -764,22 +769,23 @@
 
     return `
       <section class="btr-root">
-        <div class="btr-root-main">
-          ${renderAuthor(root)}
-          <div class="btr-message">${renderMessage(root.message)}</div>
-          ${renderPictures(root.pictures)}
-          ${renderMeta(root, { replyText: root.count ? `${root.count} 回复` : "回复" })}
-          ${root.actionError ? `<div class="btr-error">${escapeHtml(root.actionError)}</div>` : ""}
-          ${renderReplyForm(root)}
-          ${root.count > 0 ? `
-            <div class="btr-actions">
-              <button class="btr-link-button" data-action="toggle-root" data-root-id="${root.id}">
-                ${store.expanded ? "收起相关回复" : `展开相关回复 ${replySummary}`}
-              </button>
-            </div>
-          ` : ""}
+        ${renderAvatarColumn(root)}
+        <div class="btr-root-content">
+          <div class="btr-root-main">
+            ${renderAuthorLine(root)}
+            <div class="btr-message">${renderMessage(root.message)}</div>
+            ${renderPictures(root.pictures)}
+            ${renderMeta(root, { replyText: root.count ? `${root.count} 回复` : "回复" })}
+            ${root.actionError ? `<div class="btr-error">${escapeHtml(root.actionError)}</div>` : ""}
+            ${renderReplyForm(root)}
+            ${root.count > 0 && !store.expanded ? `
+              <div class="btr-actions">
+                <button class="btr-link-button" data-action="toggle-root" data-root-id="${root.id}">展开相关回复 ${replySummary}</button>
+              </div>
+            ` : ""}
+          </div>
+          ${tree}
         </div>
-        ${tree}
       </section>
     `;
   }
@@ -884,18 +890,20 @@
 
     const fresh = rootElementFromHtml(renderRoot(root));
 
-    const liveTree = live.querySelector(":scope > .btr-reply-tree");
-    const freshTree = fresh.querySelector(":scope > .btr-reply-tree");
+    // 双列结构下树与主体都挂在 .btr-root-content 内，锚点随之适配
+    const liveContent = live.querySelector(":scope > .btr-root-content");
+    const liveTree = liveContent ? liveContent.querySelector(":scope > .btr-reply-tree") : null;
+    const freshTree = fresh.querySelector(".btr-root-content > .btr-reply-tree");
     if (liveTree && freshTree) {
       if (liveTree.outerHTML !== freshTree.outerHTML) liveTree.replaceWith(freshTree);
     } else if (liveTree) {
       liveTree.remove();
-    } else if (freshTree) {
-      live.append(freshTree);
+    } else if (freshTree && liveContent) {
+      liveContent.append(freshTree);
     }
 
-    const liveMain = live.querySelector(":scope > .btr-root-main");
-    const freshMain = fresh.querySelector(":scope > .btr-root-main");
+    const liveMain = live.querySelector(".btr-root-main");
+    const freshMain = fresh.querySelector(".btr-root-main");
     if (!liveMain || !freshMain) return;
 
     const liveMeta = liveMain.querySelector(":scope > .btr-meta");

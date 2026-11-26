@@ -110,7 +110,18 @@
 
 .btr-root {
   border-bottom: 1px solid var(--btr-bg-soft);
-  padding: 20px 0;
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.btr-avatar-col {
+  flex: 0 0 auto;
+}
+
+.btr-root-content {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .btr-root-main {
@@ -209,7 +220,7 @@
   color: var(--btr-text);
   font-size: 15px;
   line-height: 1.65;
-  margin-top: 8px;
+  margin-top: 4px;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -248,7 +259,7 @@
   flex-wrap: wrap;
   font-size: 13px;
   gap: 16px;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .btr-meta-button {
@@ -336,16 +347,16 @@
   align-items: center;
   display: flex;
   gap: 10px;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .btr-reply-tree {
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .btr-node {
   margin-left: calc(var(--btr-depth) * 12px);
-  padding: 12px 0 0 12px;
+  padding: 10px 0 0 10px;
   position: relative;
 }
 
@@ -354,7 +365,7 @@
   bottom: 2px;
   left: 0;
   position: absolute;
-  top: 13px;
+  top: 12px;
   width: 1px;
 }
 
@@ -362,7 +373,13 @@
   margin-left: 48px;
 }
 
+.btr-node-row {
+  display: flex;
+  gap: 10px;
+}
+
 .btr-node-body {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -421,6 +438,10 @@
 
   .btr-title {
     font-size: 18px;
+  }
+
+  .btr-root {
+    gap: 10px;
   }
 
   .btr-node {

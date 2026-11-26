@@ -5,6 +5,9 @@
   const MAX_AUTO_ROOT_PAGES = 10;
   const ROOT_PAGE_INTERVAL_MS = 300;
 
+  // 依赖 manifest 脚本顺序，reply-utils.js 先于本文件执行
+  const { normalizeLocation, resolveMaxLine, canAutoLoadRoots } = window.BtrReplyUtils;
+
   const state = {
     aid: null,
     bvid: null,
@@ -218,6 +221,7 @@
       ctime: Number(reply.ctime || 0),
       count: Number(reply.rcount || reply.count || 0),
       timeText: reply.reply_control?.time_desc || formatTime(reply.ctime),
+      location: normalizeLocation(reply),
       parentName: reply.parent_reply_member?.name || "",
       pictures: normalizePictures(reply.content?.pictures),
     };
@@ -299,6 +303,7 @@
     return `
       <div class="btr-meta">
         <span>${escapeHtml(reply.timeText)}</span>
+        ${reply.location ? `<span>${escapeHtml(reply.location)}</span>` : ""}
         <button class="btr-meta-button btr-reaction${likedClass}" type="button" title="点赞" aria-label="点赞" data-action="like-reply" data-reply-id="${reply.id}">
           <svg class="btr-reaction-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M7.5 20.5H5.2c-1.1 0-2-.9-2-2v-7.1c0-1.1.9-2 2-2h2.3v11.1Zm2-10.8c1.4-1.3 2.4-3.2 2.7-5.3.1-.8.8-1.4 1.6-1.4 1.5 0 2.6 1.3 2.4 2.8l-.4 3h3.1c1.4 0 2.4 1.3 2.1 2.7l-1.4 6.4c-.4 1.6-1.8 2.7-3.4 2.7H9.5V9.7Z" fill="currentColor"></path>

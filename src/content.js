@@ -396,7 +396,7 @@
       const aid = await ensureAid();
 
       state.rootCursor.loading = true;
-      render();
+      renderStatus();
 
       let data;
       try {
@@ -418,7 +418,8 @@
       state.rootCursor.offset = cursor.pagination_reply?.next_offset || "";
       state.rootCursor.total = Number(cursor.all_count || state.rootCursor.total || state.roots.length);
       state.rootCursor.loaded = true;
-      render();
+      appendNewRoots();
+      renderStatus();
       autoLoadReplyPages(incoming);
 
       const endClaimed = Boolean(cursor.is_end) || incoming.length === 0;
@@ -431,7 +432,7 @@
     } finally {
       state.rootCursor.loading = false;
       state.rootCursor.paging = false;
-      render();
+      renderStatus();
     }
   }
 
@@ -507,7 +508,10 @@
     store.expanded = true;
     store.loading = true;
     store.error = "";
-    if (!options.silent) render();
+    if (!options.silent) {
+      patchRoot(root.id);
+      renderStatus();
+    }
 
     try {
       const aid = await ensureAid();
@@ -545,7 +549,10 @@
       store.error = error.message || String(error);
     } finally {
       store.loading = false;
-      if (!options.silent) render();
+      if (!options.silent) {
+        patchRoot(root.id);
+        renderStatus();
+      }
     }
   }
 
@@ -556,7 +563,7 @@
       loadReplies(root);
       return;
     }
-    render();
+    patchRoot(root.id);
   }
 
   function autoLoadReplyPages(roots) {
@@ -585,12 +592,13 @@
           if (store.isEnd) continue;
           store.autoLoaded = true;
           await loadReplies(root, { silent: true });
-          // 每完成一棵回复树就刷新状态文案，让「已加载 X/Y」实时增长
-          render();
+          // 每完成一棵回复树只重绘该树，并刷新状态文案让「已加载 X/Y」实时增长
+          patchRoot(root.id);
+          renderStatus();
         }
       } finally {
         state.autoReplyQueueRunning = false;
-        render();
+        renderStatus();
       }
       if (state.autoReplyQueue.length) runAutoReplyQueue();
     })();
@@ -672,7 +680,7 @@
     } catch (error) {
       reply.actionError = error.message || String(error);
     } finally {
-      render();
+      patchOwnerOf(reply);
     }
   }
 
@@ -684,7 +692,7 @@
     const message = textarea.value.trim();
     if (!message) {
       reply.actionError = "回复内容不能为空";
-      render();
+      patchOwnerOf(reply);
       return;
     }
 
@@ -713,7 +721,7 @@
       await loadReplies(root, { restart: true });
     } catch (error) {
       reply.actionError = error.message || String(error);
-      render();
+      patchOwnerOf(reply);
     }
   }
 
@@ -784,13 +792,23 @@
     return count;
   }
 
-  function render() {
+  // rootId → 列表中实际挂载的元素；随 renderAll 重建，是增量更新的依据
+  const rootElements = new Map();
+
+  function rootElementFromHtml(html) {
+    const template = document.createElement("template");
+    template.innerHTML = html.trim();
+    return template.content.firstElementChild;
+  }
+
+  // 只更新状态文案与「更多评论」按钮，不触碰列表 DOM
+  function renderStatus() {
     const panel = document.querySelector(".btr-panel");
     if (!panel) return;
 
-    const list = panel.querySelector(".btr-list");
     const status = panel.querySelector(".btr-status");
     const loadMore = panel.querySelector("[data-action='load-roots']");
+    if (!status || !loadMore) return;
 
     const busy = state.rootCursor.loading || state.rootCursor.paging;
     if (state.rootCursor.error) {
@@ -812,8 +830,102 @@
 
     loadMore.disabled = busy || state.rootCursor.isEnd;
     loadMore.textContent = state.rootCursor.isEnd ? "没有更多评论" : "更多评论";
-    list.innerHTML = state.roots.map(renderRoot).join("");
+  }
 
+  // 全量重建：仅用于整体重置场景（首次挂载、切换排序、刷新、换视频）
+  function renderAll() {
+    const panel = document.querySelector(".btr-panel");
+    if (!panel) return;
+    const list = panel.querySelector(".btr-list");
+    if (!list) return;
+
+    list.innerHTML = "";
+    rootElements.clear();
+    const fragment = document.createDocumentFragment();
+    for (const root of state.roots) {
+      const element = rootElementFromHtml(renderRoot(root));
+      rootElements.set(root.id, element);
+      fragment.append(element);
+    }
+    list.append(fragment);
+    renderStatus();
+  }
+
+  // 新一页根评论到达：只 append 未入缓存的元素，已渲染 DOM 不动
+  function appendNewRoots() {
+    const panel = document.querySelector(".btr-panel");
+    if (!panel) return;
+    const list = panel.querySelector(".btr-list");
+    if (!list) return;
+
+    const fragment = document.createDocumentFragment();
+    let appended = false;
+    for (const root of state.roots) {
+      if (rootElements.has(root.id)) continue;
+      const element = rootElementFromHtml(renderRoot(root));
+      rootElements.set(root.id, element);
+      fragment.append(element);
+      appended = true;
+    }
+    if (appended) list.append(fragment);
+  }
+
+  // 单条根评论的子树级更新：回复树整体替换（树内嵌套节点的元信息/报错/表单
+  // 随树覆盖），根自身的元信息行按差替换，元信息行之后的动态尾段（报错/回复
+  // 输入框/展开收起入口）整体比较、相同则不动 DOM（输入中的内容得以保留）。
+  // 头像/用户名/正文/图片永不重建。缓存 miss 或元素已脱离文档时回退全量重建
+  function patchRoot(rootId) {
+    const live = rootElements.get(rootId);
+    const root = state.roots.find((item) => item.id === rootId);
+    if (!root || !live || !live.isConnected) {
+      renderAll();
+      return;
+    }
+
+    const fresh = rootElementFromHtml(renderRoot(root));
+
+    const liveTree = live.querySelector(":scope > .btr-reply-tree");
+    const freshTree = fresh.querySelector(":scope > .btr-reply-tree");
+    if (liveTree && freshTree) {
+      if (liveTree.outerHTML !== freshTree.outerHTML) liveTree.replaceWith(freshTree);
+    } else if (liveTree) {
+      liveTree.remove();
+    } else if (freshTree) {
+      live.append(freshTree);
+    }
+
+    const liveMain = live.querySelector(":scope > .btr-root-main");
+    const freshMain = fresh.querySelector(":scope > .btr-root-main");
+    if (!liveMain || !freshMain) return;
+
+    const liveMeta = liveMain.querySelector(":scope > .btr-meta");
+    const freshMeta = freshMain.querySelector(":scope > .btr-meta");
+    if (!liveMeta || !freshMeta) return;
+    if (liveMeta.outerHTML !== freshMeta.outerHTML) liveMeta.replaceWith(freshMeta);
+
+    const tailOf = (meta) => {
+      const items = [];
+      for (let node = meta.nextElementSibling; node; node = node.nextElementSibling) items.push(node);
+      return items;
+    };
+    const currentMeta = liveMain.querySelector(":scope > .btr-meta");
+    const liveTail = tailOf(currentMeta);
+    const freshTail = tailOf(freshMain.querySelector(":scope > .btr-meta"));
+    const liveHtml = liveTail.map((node) => node.outerHTML).join("");
+    const freshHtml = freshTail.map((node) => node.outerHTML).join("");
+    if (liveHtml !== freshHtml) {
+      liveTail.forEach((node) => node.remove());
+      if (freshTail.length) currentMeta.after(...freshTail);
+    }
+
+    // 单一出口：任务 6 的折叠状态同步（syncMessageClamps）将挂在此处之前
+  }
+
+  // 按任意一条回复（根或楼中楼节点）定位所属根评论做局部重绘；定位失败回退全量
+  function patchOwnerOf(reply) {
+    const owner = reply ? findRootForReply(reply) : null;
+    if (owner) patchRoot(owner.id);
+    else renderAll();
   }
 
   function syncSortTabs() {
@@ -1045,12 +1157,14 @@
       }
       if (action === "start-reply") {
         state.activeReplyId = target.dataset.replyId;
-        render();
+        patchOwnerOf(findReplyById(state.activeReplyId));
         return;
       }
       if (action === "cancel-reply") {
+        const replyForm = target.closest(".btr-reply-form");
+        const prevReply = replyForm ? findReplyById(replyForm.dataset.replyId) : null;
         state.activeReplyId = "";
-        render();
+        patchOwnerOf(prevReply);
         return;
       }
       if (action === "toggle-theme") {
@@ -1070,7 +1184,7 @@
         if (sortMode !== state.rootCursor.mode) {
           resetRootComments(sortMode);
           syncSortTabs();
-          render();
+          renderAll();
           loadRootComments();
           return;
         }
@@ -1078,6 +1192,7 @@
       if (action === "refresh") {
         resetRootComments();
         syncSortTabs();
+        renderAll();
         loadRootComments();
       }
       if (action === "toggle-root" || action === "load-replies") {
@@ -1095,7 +1210,7 @@
       submitReply(form);
     });
 
-    render();
+    renderAll();
     loadRootComments();
   }
 
@@ -1142,7 +1257,7 @@
     state.nativeCommentHost = null;
     resetRootComments(3);
     syncSortTabs();
-    render();
+    renderAll();
     init();
   }, 1000);
 })();

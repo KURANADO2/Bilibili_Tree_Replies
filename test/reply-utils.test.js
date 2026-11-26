@@ -7,6 +7,7 @@ const {
   normalizeLocation,
   resolveMaxLine,
   canAutoLoadRoots,
+  isStalledPage,
 } = require("../src/reply-utils.js");
 
 test("normalizeLocation 取 reply_control.location 原值", () => {
@@ -42,4 +43,14 @@ test("canAutoLoadRoots 忙/结束/截断/出错逐一阻断", () => {
   assert.equal(canAutoLoadRoots({ ...IDLE_CURSOR, isEnd: true }), false);
   assert.equal(canAutoLoadRoots({ ...IDLE_CURSOR, truncated: true }), false);
   assert.equal(canAutoLoadRoots({ ...IDLE_CURSOR, error: "网络错误" }), false);
+});
+
+test("isStalledPage 零新增且未到底且游标未前进时判停滞", () => {
+  assert.equal(isStalledPage({ added: 0, endClaimed: false, offsetChanged: false }), true);
+});
+
+test("isStalledPage 有新增/已到底/游标前进均不判停滞", () => {
+  assert.equal(isStalledPage({ added: 3, endClaimed: false, offsetChanged: false }), false);
+  assert.equal(isStalledPage({ added: 0, endClaimed: true, offsetChanged: false }), false);
+  assert.equal(isStalledPage({ added: 0, endClaimed: false, offsetChanged: true }), false);
 });

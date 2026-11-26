@@ -31,9 +31,17 @@
     return !(cursor.loading || cursor.paging || cursor.isEnd || cursor.truncated || Boolean(cursor.error));
   }
 
+  // 接口返回结构合法但零进展的退化响应（内容全重复、offset 原样、声称未结束）
+  // 判定为停滞：置错误态阻断滚动自动重试，避免无间隔无限请求循环。
+  // offset 前进但内容重复不算停滞（风控截断后手动重试成功的合法场景）
+  function isStalledPage({ added, endClaimed, offsetChanged }) {
+    return added === 0 && !endClaimed && !offsetChanged;
+  }
+
   return {
     normalizeLocation,
     resolveMaxLine,
     canAutoLoadRoots,
+    isStalledPage,
   };
 });

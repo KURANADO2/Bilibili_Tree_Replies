@@ -4,7 +4,7 @@
   const MAX_INDENT_DEPTH = 4;
 
   // 依赖 manifest 脚本顺序，reply-utils.js 先于本文件执行
-  const { normalizeLocation, resolveMaxLine, canAutoLoadRoots } = window.BtrReplyUtils;
+  const { normalizeLocation, resolveMaxLine, canAutoLoadRoots, isStalledPage } = window.BtrReplyUtils;
 
   const state = {
     aid: null,
@@ -398,6 +398,7 @@
 
     try {
       const aid = await ensureAid();
+      const prevOffset = state.rootCursor.offset;
 
       state.rootCursor.loading = true;
       renderStatus();
@@ -411,10 +412,12 @@
 
       const incoming = (data.replies || []).map(normalizeReply);
       const seen = new Set(state.roots.map((reply) => reply.id));
+      let added = 0;
       incoming.forEach((reply) => {
         if (!seen.has(reply.id)) {
           state.roots.push(reply);
           seen.add(reply.id);
+          added += 1;
         }
       });
 
@@ -427,7 +430,10 @@
       autoLoadReplyPages(incoming);
 
       const endClaimed = Boolean(cursor.is_end) || incoming.length === 0;
-      if (endClaimed || !state.rootCursor.offset) {
+      if (isStalledPage({ added, endClaimed, offsetChanged: state.rootCursor.offset !== prevOffset })) {
+        // 退化响应零进展：置错误态阻断滚动自动重试，「更多评论」仍可手动重试
+        state.rootCursor.error = "加载无进展，请点击「更多评论」重试";
+      } else if (endClaimed || !state.rootCursor.offset) {
         state.rootCursor.truncated = isRootListTruncated();
         state.rootCursor.isEnd = !state.rootCursor.truncated && endClaimed;
       }
@@ -949,6 +955,9 @@
   // 展开状态存 state.expandedMessages，每次局部/全量重绘后重新同步不丢
   function syncMessageClamps(container) {
     if (!container) return;
+    // 列表处于 display:none（原生评论区模式）时量不到布局，
+    // 溢出判定会恒 false 误隐藏「展开」按钮，跳过等恢复可见后补测
+    if (typeof container.getClientRects === "function" && container.getClientRects().length === 0) return;
     const messages = container.classList && container.classList.contains("btr-message")
       ? [container]
       : [...container.querySelectorAll(".btr-message")];
@@ -1115,6 +1124,12 @@
     if (toggle) {
       toggle.textContent = state.nativeVisible ? "切换到树形评论" : "切换到原评论区";
       toggle.title = nativeComponent ? "" : "暂未定位到原评论区";
+    }
+
+    // 切回树形模式后列表重新可见，补测长文折叠按钮（隐藏期间的重绘量不到布局）
+    if (!state.nativeVisible) {
+      const list = document.querySelector(".btr-list");
+      if (list) syncMessageClamps(list);
     }
   }
 

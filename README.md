@@ -2,6 +2,8 @@
 
 一个 Chrome MV3 扩展，用树形结构展示 B 站视频评论下的多级回复。
 
+<img src="img/demo.png" width="800">
+
 ## 使用
 
 1. 打开 Chrome 扩展管理页：`chrome://extensions/`

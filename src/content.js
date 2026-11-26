@@ -27,6 +27,7 @@
     nativeVisible: false,
     nativeCommentHost: null,
     activeReplyId: "",
+    expandedMessages: new Set(),
     storeGeneration: 0,
     pageBridgeReady: false,
     pageBridgeReadyPromise: null,
@@ -220,6 +221,7 @@
       count: Number(reply.rcount || reply.count || 0),
       timeText: reply.reply_control?.time_desc || formatTime(reply.ctime),
       location: normalizeLocation(reply),
+      maxLine: resolveMaxLine(reply),
       parentName: reply.parent_reply_member?.name || "",
       pictures: normalizePictures(reply.content?.pictures),
     };
@@ -351,6 +353,7 @@
     state.autoReplyQueueRunning = false;
     state.storeGeneration += 1;
     state.activeReplyId = "";
+    state.expandedMessages.clear();
   }
 
   // 依据已加载根评论的 rcount 估算全树规模，与 all_count 差距过大说明
@@ -737,7 +740,8 @@
           ${renderAvatarColumn(node)}
           <div class="btr-node-body">
             ${renderAuthorLine(node)}
-            <div class="btr-message">${renderMessage(node.message)}</div>
+            <div class="btr-message" data-reply-id="${node.id}" style="--btr-max-line:${node.maxLine}">${renderMessage(node.message)}</div>
+            <button class="btr-clamp-toggle" type="button" data-action="expand-message" data-reply-id="${node.id}" hidden>展开</button>
             ${renderPictures(node.pictures)}
             ${renderMeta(node)}
             ${node.actionError ? `<div class="btr-error">${escapeHtml(node.actionError)}</div>` : ""}
@@ -773,7 +777,8 @@
         <div class="btr-root-content">
           <div class="btr-root-main">
             ${renderAuthorLine(root)}
-            <div class="btr-message">${renderMessage(root.message)}</div>
+            <div class="btr-message" data-reply-id="${root.id}" style="--btr-max-line:${root.maxLine}">${renderMessage(root.message)}</div>
+            <button class="btr-clamp-toggle" type="button" data-action="expand-message" data-reply-id="${root.id}" hidden>展开</button>
             ${renderPictures(root.pictures)}
             ${renderMeta(root, { replyText: root.count ? `${root.count} 回复` : "回复" })}
             ${root.actionError ? `<div class="btr-error">${escapeHtml(root.actionError)}</div>` : ""}
@@ -854,6 +859,7 @@
       fragment.append(element);
     }
     list.append(fragment);
+    syncMessageClamps(list);
     renderStatus();
   }
 
@@ -873,7 +879,10 @@
       fragment.append(element);
       appended = true;
     }
-    if (appended) list.append(fragment);
+    if (appended) {
+      list.append(fragment);
+      syncMessageClamps(list);
+    }
   }
 
   // 单条根评论的子树级更新：回复树整体替换（树内嵌套节点的元信息/报错/表单
@@ -926,7 +935,7 @@
       if (freshTail.length) currentMeta.after(...freshTail);
     }
 
-    // 单一出口：任务 6 的折叠状态同步（syncMessageClamps）将挂在此处之前
+    syncMessageClamps(live);
   }
 
   // 按任意一条回复（根或楼中楼节点）定位所属根评论做局部重绘；定位失败回退全量
@@ -934,6 +943,33 @@
     const owner = reply ? findRootForReply(reply) : null;
     if (owner) patchRoot(owner.id);
     else renderAll();
+  }
+
+  // 渲染后按实际布局判定长文是否被截断：截断才显示「展开」按钮；
+  // 展开状态存 state.expandedMessages，每次局部/全量重绘后重新同步不丢
+  function syncMessageClamps(container) {
+    if (!container) return;
+    const messages = container.classList && container.classList.contains("btr-message")
+      ? [container]
+      : [...container.querySelectorAll(".btr-message")];
+    for (const message of messages) {
+      const replyId = message.dataset.replyId;
+      if (!replyId) continue;
+      const next = message.nextElementSibling;
+      const button = next && next.classList.contains("btr-clamp-toggle") ? next : null;
+      if (!button) continue;
+
+      const expanded = state.expandedMessages.has(replyId);
+      message.classList.toggle("btr-message--expanded", expanded);
+      if (expanded) {
+        button.hidden = false;
+        button.textContent = "收起";
+      } else {
+        const overflowing = message.scrollHeight > message.clientHeight + 1;
+        button.hidden = !overflowing;
+        button.textContent = "展开";
+      }
+    }
   }
 
   function syncSortTabs() {
@@ -1161,6 +1197,16 @@
       const action = target.dataset.action;
       if (action === "like-reply" || action === "dislike-reply") {
         handleReaction(target.dataset.replyId, action === "like-reply" ? "like" : "dislike");
+        return;
+      }
+      if (action === "expand-message") {
+        const replyId = target.dataset.replyId;
+        if (state.expandedMessages.has(replyId)) {
+          state.expandedMessages.delete(replyId);
+        } else {
+          state.expandedMessages.add(replyId);
+        }
+        patchOwnerOf(findReplyById(replyId));
         return;
       }
       if (action === "start-reply") {
